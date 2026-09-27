@@ -1,0 +1,36 @@
+services:
+
+  db:
+    image: postgres:16-alpine
+    container_name: geospatial_db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: geospatial
+    ports:
+      - "4444:5432"      # host port 4444 → container port 5432
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d geospatial"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: geospatial_api
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      DATABASE_URL: postgresql+psycopg2://postgres:postgres@db:5432/geospatial
+    depends_on:
+      db:
+        condition: service_healthy
+
+volumes:
+  postgres_data:
