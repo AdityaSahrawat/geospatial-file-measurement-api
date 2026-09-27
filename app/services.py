@@ -1,10 +1,13 @@
 import logging
+import math
 import os
 import tempfile
 import zipfile
+from datetime import datetime
 from pathlib import Path
 
 import geopandas as gpd
+import pandas as pd
 from fastapi import UploadFile
 from shapely.geometry import Polygon, MultiPolygon, LineString, MultiLineString
 from sqlalchemy.orm import Session
@@ -99,7 +102,7 @@ async def process_uploaded_file(file: UploadFile):
 
                 for i, measurement in enumerate(measurements):
                     logger.debug(
-                        "[6/6] Saving feature %d/%d: index=%d type=%s area=%s length=%s",
+                        "[6/6] Staging feature %d/%d: index=%d type=%s area=%s length=%s",
                         i + 1, len(measurements),
                         measurement["feature_index"],
                         measurement["geometry_type"],
@@ -111,6 +114,10 @@ async def process_uploaded_file(file: UploadFile):
                         file_id=file_record.id,
                         measurement=measurement,
                     )
+
+                # Single commit for all features — much faster than per-row commits
+                db.commit()
+                logger.info("[6/6] Committed %d feature records", len(measurements))
 
             logger.info("[6/6] All features saved successfully")
 
@@ -185,9 +192,12 @@ def _safe_extract_zip(
                 destination / member.filename
             ).resolve()
 
+            # Ensure resolved path is inside destination.
+            # Add os.sep to prevent partial prefix matches
+            # e.g. /tmp/upload-evil matching /tmp/upload
             if not str(member_path).startswith(
-                str(destination)
-            ):
+                str(destination) + os.sep
+            ) and member_path != destination:
                 raise ValueError(
                     "Unsafe ZIP file detected."
                 )
@@ -243,6 +253,7 @@ def _select_projected_crs(
 
     try:
         projected_crs = gdf.estimate_utm_crs()
+        logger.info("[4/6] Selected UTM CRS: %s", projected_crs)
 
         if projected_crs is None:
             raise ValueError(
@@ -251,6 +262,8 @@ def _select_projected_crs(
 
         return projected_crs
 
+    except ValueError:
+        raise  # don't swallow our own ValueError messages
     except Exception as exc:
         raise ValueError(
             f"Unable to select projected CRS: {exc}"
@@ -329,9 +342,6 @@ def _extract_properties(row):
     - datetime → ISO string
     """
 
-    import math
-    import pandas as pd
-    from datetime import datetime
 
     properties = {}
 
@@ -404,7 +414,7 @@ def _save_feature(
     file_id: int,
     measurement: dict,
 ) -> FeatureRecord:
-    """Insert a FeatureRecord row for a single geometry feature."""
+    """Stage a FeatureRecord row — caller must commit."""
 
     record = FeatureRecord(
         file_id=file_id,
@@ -416,7 +426,8 @@ def _save_feature(
     )
 
     db.add(record)
-    db.commit()
+    # No commit here — batched commit in the caller is much faster
+    # for files with hundreds/thousands of features.
 
     return record
 
