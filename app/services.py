@@ -324,11 +324,14 @@ def _extract_properties(row):
     Convert GeoPandas row into JSON-compatible
     properties, excluding geometry.
 
-    NaN values are converted to None (JSON null)
-    because PostgreSQL rejects NaN in JSON columns.
+    - NaN  → None  (float null)
+    - NaT  → None  (datetime null — common in KML files)
+    - datetime → ISO string
     """
 
     import math
+    import pandas as pd
+    from datetime import datetime
 
     properties = {}
 
@@ -339,6 +342,11 @@ def _extract_properties(row):
 
         value = getattr(row, field)
 
+        # pandas NaT ("Not a Time") — datetime equivalent of NaN
+        if value is pd.NaT:
+            properties[field] = None
+            continue
+
         # Convert NumPy scalar values where required.
         if hasattr(value, "item"):
             try:
@@ -346,12 +354,16 @@ def _extract_properties(row):
             except (ValueError, TypeError):
                 pass
 
-        # NaN is not valid JSON — convert to None (null)
+        # NaN float → None
         try:
             if value is not None and math.isnan(value):
                 value = None
         except (TypeError, ValueError):
             pass  # non-numeric types: ignore
+
+        # datetime → ISO 8601 string so JSON can serialize it
+        if isinstance(value, datetime):
+            value = value.isoformat()
 
         properties[field] = value
 
